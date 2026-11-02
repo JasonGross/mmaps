@@ -480,6 +480,58 @@ Proof. rewrite singleton_set. apply get_set_same. Qed.
 Lemma get_singleton_diff {A} i j (x : A) : i <> j -> get i (Some (singleton j x)) = None.
 Proof. intros. rewrite singleton_set, get_set_diff; trivial. Qed.
 
+(** ** Equations between the operations (coqutil's [Map.Properties]) *)
+
+Lemma get_set_dec {A} i j (x : A) m :
+  get i (set j x m) = if Pos.eq_dec i j then Some x else get i m.
+Proof. destruct (Pos.eq_dec i j) as [->|]; [apply get_set_same|now apply get_set_diff]. Qed.
+
+Lemma get_remove_dec {A} i j (m : trie A) :
+  get i (remove j m) = if Pos.eq_dec i j then None else get i m.
+Proof. destruct (Pos.eq_dec i j) as [->|]; [apply get_remove_same|now apply get_remove_diff]. Qed.
+
+Lemma set_set_same {A} i (x y : A) m : set i y (set i x m) = set i y m.
+Proof. apply extensionality; intros k; rewrite !get_set_dec; destruct Pos.eq_dec; reflexivity. Qed.
+Lemma set_set_diff {A} i j (x y : A) m : i <> j -> set i x (set j y m) = set j y (set i x m).
+Proof.
+  intros; apply extensionality; intros k; rewrite !get_set_dec.
+  repeat destruct Pos.eq_dec; congruence.
+Qed.
+Lemma set_idemp {A} i (x : A) m : get i m = Some x -> set i x m = m.
+Proof. intros; apply extensionality; intros k; rewrite get_set_dec; destruct Pos.eq_dec; congruence. Qed.
+Lemma set_remove_same {A} i (x : A) m : set i x (remove i m) = set i x m.
+Proof.
+  apply extensionality; intros k; rewrite !get_set_dec, get_remove_dec.
+  destruct Pos.eq_dec; reflexivity.
+Qed.
+Lemma remove_set_same {A} i (x : A) m : remove i (set i x m) = remove i m.
+Proof.
+  apply extensionality; intros k; rewrite !get_remove_dec, get_set_dec.
+  destruct Pos.eq_dec; reflexivity.
+Qed.
+Lemma remove_set_diff {A} i j (x : A) m : i <> j -> remove i (set j x m) = set j x (remove i m).
+Proof.
+  intros; apply extensionality; intros k; rewrite !get_remove_dec, !get_set_dec, !get_remove_dec.
+  repeat destruct Pos.eq_dec; congruence.
+Qed.
+Lemma remove_remove_same {A} i (m : trie A) : remove i (remove i m) = remove i m.
+Proof. apply extensionality; intros k; rewrite !get_remove_dec; destruct Pos.eq_dec; reflexivity. Qed.
+Lemma remove_remove_diff {A} i j (m : trie A) : remove i (remove j m) = remove j (remove i m).
+Proof.
+  apply extensionality; intros k; rewrite !get_remove_dec.
+  repeat destruct Pos.eq_dec; reflexivity.
+Qed.
+Lemma remove_not_in {A} i (m : trie A) : get i m = None -> remove i m = m.
+Proof. intros; apply extensionality; intros k; rewrite get_remove_dec; destruct Pos.eq_dec; congruence. Qed.
+Lemma remove_empty {A} i : remove i (empty A) = empty A.
+Proof. reflexivity. Qed.
+
+Lemma to_list_singleton {A} i (x : A) : to_list (Some (singleton i x)) = (i, x) :: nil.
+Proof.
+  rewrite singleton_set. induction i; rewrite set_None, set_Node, to_list_Node;
+    [rewrite IHi|rewrite IHi|]; reflexivity.
+Qed.
+
 (** ** [mapi_filter]: [map_filter] with the key *)
 
 Section MapiFilter.
@@ -612,6 +664,12 @@ Proof.
   intros H b c Hbc m. rewrite !fold_to_list. revert b c Hbc.
   induction (to_list m) as [|(k,v) l IH]; simpl; auto.
 Qed.
+
+Lemma fold_empty {A B} (f : positive -> A -> B -> B) b : fold f (empty A) b = b.
+Proof. reflexivity. Qed.
+Lemma fold_singleton {A B} (f : positive -> A -> B -> B) i (x : A) b :
+  fold f (Some (singleton i x)) b = f i x b.
+Proof. rewrite fold_to_list, to_list_singleton. reflexivity. Qed.
 
 (** [of_list l] sets the bindings of [l] in order; [to_list] is its inverse. *)
 Definition of_list {A} (l : list (positive * A)) : trie A :=

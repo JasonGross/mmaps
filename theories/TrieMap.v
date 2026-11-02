@@ -173,11 +173,7 @@ Module TrieMap <: S PositiveOrderedTypeBits.
   (** [singleton] *)
 
   Theorem singleton_spec i x : bindings (singleton i x) = (i,x)::nil.
-  Proof.
-   unfold singleton, add.
-   induction i; rewrite set_None, set_Node, bindings_node;
-    [rewrite IHi|rewrite IHi|]; reflexivity.
-  Qed.
+  Proof. apply to_list_singleton. Qed.
 
   (** [cardinal] *)
 
@@ -635,24 +631,15 @@ Module TrieMapAdditionalFacts.
     [ apply add_spec1 | apply add_spec2; auto ].
   Qed.
 
-  (* Not derivable from the Map interface, but easy from extensionality *)
+  (* Not derivable from the Map interface; instances of [Trie.set_idemp]
+     and [Trie.remove_not_in] *)
   Theorem gsident {A} i (m:t A) v :
     find i m = Some v -> add i v m = m.
-  Proof.
-    intros H. apply extensionality. intros k.
-    change (find k (add i v m) = find k m).
-    rewrite gsspec. destruct E.eq_dec; congruence.
-  Qed.
+  Proof. apply set_idemp. Qed.
 
   Theorem remove_absent {A} i (m:t A) :
     find i m = None -> remove i m = m.
-  Proof.
-    intros H. apply extensionality. intros k.
-    change (find k (remove i m) = find k m).
-    destruct (E.eq_dec k i) as [->|].
-    - now rewrite remove_spec1.
-    - apply remove_spec2; auto.
-  Qed.
+  Proof. apply remove_not_in. Qed.
 
   Theorem merge_commut{A B C}
     (f: key -> option A -> option B -> option C)
