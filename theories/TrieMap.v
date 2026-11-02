@@ -32,16 +32,7 @@ Module TrieMap <: S PositiveOrderedTypeBits.
   #[export] Instance eqke_equiv {A} : Equivalence (@eq_key_elt A) := _.
   #[export] Instance ltk_strorder {A} : StrictOrder (@lt_key A) := _.
 
-  (** Reverses the positive [y] and concatenate it with [x] *)
-
-  Fixpoint rev_append (y x : positive) : positive :=
-    match y with
-    | xH => x
-    | xI y => rev_append y (xI x)
-    | xO y => rev_append y (xO x)
-    end.
   Local Infix "@" := rev_append (at level 60).
-  Definition rev x := x@xH.
 
   Definition t := trie.
 
@@ -133,101 +124,29 @@ Module TrieMap <: S PositiveOrderedTypeBits.
 
   (** Specification of [bindings] *)
 
-  Definition fstmap (f:key->key) '(k, e) : key*A := (f k, e).
-
   Lemma bindings_node r l o :
    bindings (Node l o r) =
    (List.map (fstmap xO) (bindings l)) ++
    (match o with Some e => (xH,e)::nil | None => nil end) ++
    (List.map (fstmap xI) (bindings r)).
-  Proof. case l, o, r; reflexivity. Qed.
+  Proof. apply to_list_Node. Qed.
 
-  Local Notation InL := (InA eq_key_elt).
-
-  Lemma InL_fstmap f k e l :
-    InL (k,e) (List.map (fstmap f) l) <-> exists k', k = f k' /\ InL (k',e) l.
+  Local Lemma InA_eq_key_elt (p : key*A) l : InA eq_key_elt p l <-> List.In p l.
   Proof.
     unfold eq_key_elt, ME.eqke, RelProd, relation_conjunction, RelCompFun, E.eq.
-    induction l as [|(k0,e0) l IH]; simpl.
-    - rewrite InA_nil. split; [intros []|intros (k' & _ & H); inversion H].
-    - split.
-      + intros H. apply InA_cons in H. destruct H as [(Hk,He)|H]; simpl in *.
-        * exists k0. split; [exact Hk|]. left. split; simpl; [reflexivity|exact He].
-        * apply IH in H. destruct H as (k' & -> & H). exists k'. split; trivial. now right.
-      + intros (k' & -> & H). apply InA_cons in H. destruct H as [(Hk,He)|H]; simpl in *.
-        * subst. left. split; reflexivity.
-        * right. apply IH. exists k'. auto.
-  Qed.
-
-  Lemma InL_opt k e (o : option A) :
-    InL (k,e) (match o with Some v => (xH,v)::nil | None => nil end)
-    <-> k = xH /\ o = Some e.
-  Proof.
-    unfold eq_key_elt, ME.eqke, RelProd, relation_conjunction, RelCompFun, E.eq.
-    destruct o as [v|]; rewrite ?InA_cons, InA_nil; split.
-    - intros [(Hk,He)|[]]. simpl in *. subst. auto.
-    - intros (-> & [= ->]). left. split; reflexivity.
-    - intros [].
-    - intros (_ & [=]).
+    rewrite InA_alt. split.
+    - intros ((k,x) & (Hk,Hx) & ?). destruct p; simpl in *. now subst.
+    - intros ?. exists p. split; [|trivial]. destruct p; split; reflexivity.
   Qed.
 
   Lemma bindings_spec1 m k e :
     InA eq_key_elt (k,e) (bindings m) <-> MapsTo k e m.
-  Proof.
-    unfold MapsTo. revert k.
-    induction m as [|l IHl o r IHr _] using trie_ind; intros k.
-    - split; [inversion 1 | discriminate].
-    - rewrite bindings_node, !InA_app_iff, !InL_fstmap, InL_opt, get_Node.
-      setoid_rewrite IHl. setoid_rewrite IHr.
-      destruct k as [k|k|]; split.
-      + intros [(k0 & H & _)|[(H & _)|(k0 & H & H')]]; try discriminate.
-        injection H as <-. exact H'.
-      + intros H. right. right. exists k. auto.
-      + intros [(k0 & H & H')|[(H & _)|(k0 & H & _)]]; try discriminate.
-        injection H as <-. exact H'.
-      + intros H. left. exists k. auto.
-      + intros [(k0 & H & _)|[(_ & H)|(k0 & H & _)]]; try discriminate. exact H.
-      + intros H. right. left. auto.
-  Qed.
-
-  Lemma sort_app (l1 l2 : list (key*A)) :
-    sort lt_key l1 -> sort lt_key l2 ->
-    (forall x y, List.In x l1 -> List.In y l2 -> lt_key x y) ->
-    sort lt_key (l1 ++ l2).
-  Proof.
-    induction 1 as [|x l1 Hs IH Hinf]; simpl; intros Hs2 Hlt; trivial.
-    constructor; [apply IH; trivial; intros; apply Hlt; simpl; auto|].
-    destruct Hinf as [|y l1' H]; simpl.
-    - destruct l2; constructor. apply Hlt; simpl; auto.
-    - constructor; trivial.
-  Qed.
-
-  Lemma sort_fstmap f l :
-    (forall x y, E.lt x y -> E.lt (f x) (f y)) ->
-    sort lt_key l -> sort lt_key (List.map (fstmap f) l).
-  Proof.
-    intros Hf. induction 1 as [|(k,e) l Hs IH Hinf]; simpl; constructor; trivial.
-    destruct Hinf as [|(k',e') l' H]; simpl; constructor.
-    unfold lt_key, ME.ltk, RelCompFun in *; simpl in *. now apply Hf.
-  Qed.
+  Proof. rewrite InA_eq_key_elt. apply In_to_list. Qed.
 
   Lemma bindings_spec2 m : sort lt_key (bindings m).
   Proof.
-    induction m as [|l IHl o r IHr _] using trie_ind; [constructor|].
-    rewrite bindings_node.
-    apply sort_app; [apply sort_fstmap; trivial| apply sort_app |].
-    - destruct o; repeat constructor.
-    - apply sort_fstmap; trivial.
-    - intros (x,d) (y,d') Hx Hy.
-      destruct o; simpl in Hx; [destruct Hx as [[= <- <-]|[]]|destruct Hx].
-      rewrite in_map_iff in Hy. destruct Hy as ((k,e) & [= <- <-] & _).
-      red; simpl; exact I.
-    - intros (x,d) (y,d') Hx Hy.
-      rewrite in_map_iff in Hx. destruct Hx as ((k,e) & [= <- <-] & _).
-      rewrite in_app_iff, in_map_iff in Hy.
-      destruct Hy as [Hy|((k',e') & [= <- <-] & _)];
-        [destruct o; simpl in Hy; [destruct Hy as [[= <- <-]|[]]|destruct Hy]|];
-        red; simpl; exact I.
+    unfold bindings, lt_key, ME.ltk, RelCompFun.
+    apply (Sorted_to_list E.lt); unfold E.lt; intros; simpl; auto.
   Qed.
 
   Lemma bindings_spec2w m : NoDupA eq_key (bindings m).
@@ -278,50 +197,21 @@ Module TrieMap <: S PositiveOrderedTypeBits.
 
   Variable B : Type.
 
-  Section Mapi.
-
-    Variable f : key -> A -> option B.
-
-    Fixpoint xmapi' (m : branch A) (i : positive) {struct m} : t B :=
-      branch_map (fun l o r =>
-        Node (option_bind (fun l => xmapi' l (xO i)) l)
-             (option_bind (f (rev i)) o)
-             (option_bind (fun r => xmapi' r (xI i)) r)) m.
-
-    Definition xmapi (m : t A) (i : positive) : t B :=
-      match m with Some m => xmapi' m i | None => None end.
-
-    Lemma xmapi_Node l o r i :
-      xmapi (Node l o r) i =
-      Node (xmapi l (xO i)) (option_bind (f (rev i)) o) (xmapi r (xI i)).
-    Proof. case l, o, r; reflexivity. Qed.
-
-  End Mapi.
-
   Definition mapi (f : key -> A -> B) m :=
-    xmapi (fun k a => Some (f k a)) m xH.
+    xmapi_filter (fun k a => Some (f k a)) m xH.
 
   Definition map (f : A -> B) : t A -> t B := map_filter (fun a => Some (f a)).
 
   End A.
 
-  Lemma xgmapi:
-    forall (A B: Type) (f: key -> A -> option B) (i j : key) (m: t A),
-      find i (xmapi f m j) = option_bind (f (j@i)) (find i m).
-  Proof.
-  unfold find.
-  induction i; intros; induction m using trie_ind;
-   rewrite ?xmapi_Node, ?get_Node, ?IHi; simpl; auto.
-  Qed.
-
   Lemma xmapi_spec A B (f: key -> A -> option B) (i : key) (m : t A) :
-    bindings (xmapi f m i) =
+    bindings (xmapi_filter f m i) =
     mapfilter (fun '(k,e) => option_map (pair k) (f (i@k) e))
               (bindings m).
   Proof.
   revert i.
   induction m as [|l IHl o r IHr _] using trie_ind; simpl; intros. easy.
-  rewrite xmapi_Node, !bindings_node, !mapfilter_app. f_equal.
+  rewrite xmapi_filter_Node, !bindings_node, !mapfilter_app. f_equal.
   - rewrite IHl; auto. rewrite map_mapfilter, mapfilter_map; f_equiv.
     intros a a' <-. destruct a. simpl. now destruct f.
   - f_equal.
@@ -342,7 +232,7 @@ Module TrieMap <: S PositiveOrderedTypeBits.
   Lemma map_as_mapi A B (f:A -> B)(m : t A) : map f m = mapi (fun _ => f) m.
   Proof.
   apply extensionality. intros i. unfold map, mapi.
-  rewrite get_map_filter. now rewrite (xgmapi _ i xH m).
+  rewrite get_map_filter, get_xmapi_filter. reflexivity.
   Qed.
 
   Lemma map_spec A B (f:A -> B)(m : t A) :
@@ -354,54 +244,8 @@ Module TrieMap <: S PositiveOrderedTypeBits.
 
   (** [merge] *)
 
-  Section Merge.
-  Variable A B C : Type.
-  Variable f : key -> option A -> option B -> option C.
-
-  Local Notation xmerge'_l i m := (xmapi (fun k a => f k (Some a) None) (Some m) i).
-  Local Notation xmerge'_r i m := (xmapi (fun k b => f k None (Some b)) (Some m) i).
-
-  Let Fixpoint xmerge'' (m1 : branch A) (m2 : branch B) (i : positive) {struct m1} : t C.
-  Proof. (* 49 cases *)
-    case m1 as [ r1 | x1 | x1 r1 | l1 | l1 r1 | l1 x1 | l1 x1 r1 ];
-    case m2 as [ r2 | x2 | x2 r2 | l2 | l2 r2 | l2 x2 | l2 x2 r2 ]; (apply Node;
-     [ try (exact (xmerge'' l1 l2 (xO i)) || exact (xmerge'_l (xO i) l1) || exact (xmerge'_r (xO i) l2))
-     | apply (f (rev i)); [ try exact (Some x1) | try exact (Some x2) ]
-     | try (exact (xmerge'' r1 r2 (xI i)) || exact (xmerge'_l (xI i) r1) || exact (xmerge'_r (xI i) r2))
-     ]; exact None).
-  Defined.
-  Local Definition xmerge' := Eval cbv [xmerge'' Node xmapi] in xmerge''.
-
-  Definition xmerge (m1 : t A) (m2 : t B) (i : positive) : t C :=
-    match m1, m2 with
-    | None, None => None
-    | None, Some m2 => xmerge'_r i m2
-    | Some m1, None => xmerge'_l i m1
-    | Some m1, Some m2 => xmerge' m1 m2 i
-    end.
-
-  Hypothesis f_None_None : forall k, f k None None = None.
-
-  Lemma xmerge_Node_Node l1 o1 r1 l2 o2 r2 i :
-    xmerge (Node l1 o1 r1) (Node l2 o2 r2) i =
-    Node (xmerge l1 l2 (xO i)) (f (rev i) o1 o2) (xmerge r1 r2 (xI i)).
-  Proof. case l1, o1, r1, l2, o2, r2; trivial; rewrite ?f_None_None; trivial. Qed.
-
-  Lemma xgmerge: forall (i j: key)(m1:t A)(m2: t B),
-      find i (xmerge m1 m2 j) = f (j@i) (find i m1) (find i m2).
-  Proof.
-    unfold find.
-    induction i; intros j m1 m2;
-    induction m1 using trie_ind; induction m2 using trie_ind;
-    repeat (change (xmerge None) with (xmerge (Node None None None))
-         || change (xmerge ?x None) with (xmerge x (Node None None None)));
-    rewrite ?xmerge_Node_Node, ?get_Node, ?IHi; simpl; auto.
-  Qed.
-
-  End Merge.
-
   Definition merge {A B C}(f:key->option A->option B->option C) m1 m2 :=
-   xmerge
+   xmergei
      (fun k o1 o2 => match o1,o2 with
        | None,None => None
        | _, _ => f k o1 o2
@@ -415,11 +259,11 @@ Module TrieMap <: S PositiveOrderedTypeBits.
      find x (merge f m m') = f y (find x m) (find x m').
   Proof.
   intros. exists x. split. reflexivity.
-  unfold merge.
-  rewrite xgmerge; simpl; auto.
-  rewrite <- 2 mem_spec, 2 mem_find in H.
-  destruct (find x m); simpl; auto.
-  destruct (find x m'); simpl; auto. intuition discriminate.
+  unfold merge, find.
+  rewrite get_xmergei; simpl; auto.
+  rewrite <- 2 mem_spec, 2 mem_find in H. unfold find in H.
+  destruct (get x m); simpl; auto.
+  destruct (get x m'); simpl; auto. intuition discriminate.
   Qed.
 
   Lemma merge_spec2 {A B C}(f:key->option A->option B->option C) :
@@ -427,11 +271,11 @@ Module TrieMap <: S PositiveOrderedTypeBits.
   Proof.
   intros.
   rewrite <-mem_spec, mem_find in H.
-  unfold merge in H.
-  rewrite xgmerge in H; simpl; auto.
-  rewrite <- 2 mem_spec, 2 mem_find.
-  destruct (find x m); simpl in *; auto.
-  destruct (find x m'); simpl in *; auto.
+  unfold merge, find in H.
+  rewrite get_xmergei in H; simpl; auto.
+  rewrite <- 2 mem_spec, 2 mem_find. unfold find.
+  destruct (get x m); simpl in *; auto.
+  destruct (get x m'); simpl in *; auto.
   Qed.
 
   (** [fold] *)
@@ -441,46 +285,14 @@ Module TrieMap <: S PositiveOrderedTypeBits.
     Variables A B : Type.
     Variable f : key -> A -> B -> B.
 
-    Fixpoint xfold' (m : branch A) (v : B) (i : key) {struct m} : B :=
-      branch_map (fun l o r =>
-        let v := match l with Some l => xfold' l v (xO i) | None => v end in
-        let v := match o with Some x => f (rev i) x v | None => v end in
-        match r with Some r => xfold' r v (xI i) | None => v end) m.
-
-    Definition xfold (m : t A) (v : B) (i : key) : B :=
-      match m with Some m => xfold' m v i | None => v end.
-
-    Definition fold m i := xfold m i xH.
-
-    Lemma xfold_Node l o r v i :
-      xfold (Node l o r) v i =
-      match o with
-      | Some x => xfold r (f (rev i) x (xfold l v (xO i))) (xI i)
-      | None => xfold r (xfold l v (xO i)) (xI i)
-      end.
-    Proof. case l, o, r; reflexivity. Qed.
+    Definition fold (m : t A) (i : B) : B := Trie.fold f m i.
 
   End Fold.
-
-  Lemma xfold_bindings :
-    forall (A B : Type) (f : key -> A -> B -> B) m v j,
-    xfold f m v j =
-    fold_left (fun a p => f (fst p) (snd p) a) (List.map (fstmap (rev_append j)) (bindings m)) v.
-  Proof.
-    intros A B f.
-    induction m as [|l IHl o r IHr _] using trie_ind; intros; trivial.
-    rewrite xfold_Node, bindings_node, !map_app, !fold_left_app, !map_map.
-    destruct o; simpl; rewrite IHr, IHl;
-      repeat (f_equal; try (apply map_ext; now intros (?,?))).
-  Qed.
 
   Lemma fold_spec :
     forall {A}(m:t A){B}(i : B) (f : key -> A -> B -> B),
     fold f m i = fold_left (fun a p => f (fst p) (snd p) a) (bindings m) i.
-  Proof.
-    intros. unfold fold. rewrite xfold_bindings.
-    erewrite map_ext with (g := fun p => p); [now rewrite map_id | now intros (k,e)].
-  Qed.
+  Proof. intros. apply fold_to_list. Qed.
 
   (** [equal] *)
 
@@ -674,7 +486,7 @@ Module TrieMap <: S PositiveOrderedTypeBits.
   (** [filter], [partition], [for_all], [exists_] *)
 
   Definition filter A (f:key->A->bool) m :=
-    xmapi (fun k a => if f k a then Some a else None) m xH.
+    xmapi_filter (fun k a => if f k a then Some a else None) m xH.
   Definition partition A (f:key->A->bool) m :=
     (filter f m, filter (fun k e => negb (f k e)) m).
 
@@ -849,9 +661,8 @@ Module TrieMapAdditionalFacts.
     forall m1 m2, merge f m1 m2 = merge g m2 m1.
   Proof.
     intros E m1 m2. apply extensionality. intros k.
-    change (find k (merge f m1 m2) = find k (merge g m2 m1)).
-    unfold merge. rewrite !xgmerge by (intro; reflexivity); simpl.
-    destruct (find k m1), (find k m2); simpl; auto.
+    unfold merge. rewrite !get_xmergei by (intro; reflexivity); simpl.
+    destruct (get k m1), (get k m2); simpl; auto.
   Qed.
 
 End TrieMapAdditionalFacts.

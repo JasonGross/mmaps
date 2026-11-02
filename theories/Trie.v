@@ -12,7 +12,7 @@
     [MMaps.TrieMap] packages the tries as an instance of [MMaps.Interface.S]
     with keys ordered by [PositiveOrderedTypeBits]. *)
 
-From Coq Require Import PArith List.
+From Coq Require Import PArith List Sorted.
 
 Definition option_bind {A B} (f : A -> option B) (o : option A) : option B :=
   match o with None => None | Some a => f a end.
@@ -318,11 +318,14 @@ Lemma values_Node {A} l (o : option A) r :
   values (Node l o r) = values l ++ Option.to_list o ++ values r.
 Proof. case l, o, r; reflexivity. Qed.
 
+(** [fstmap f] applies [f] to the key of a binding. *)
+Definition fstmap {A} (f : positive -> positive) '(k, v) : positive * A := (f k, v).
+
 Lemma to_list_Node {A} l (o : option A) r :
   to_list (Node l o r) =
-  map (fun '(k, v) => (xO k, v)) (to_list l)
+  map (fstmap xO) (to_list l)
   ++ (match o with None => nil | Some v => cons (xH, v) nil end)
-  ++ map (fun '(k, v) => (xI k, v)) (to_list r).
+  ++ map (fstmap xI) (to_list r).
 Proof. case l, o, r; reflexivity. Qed.
 
 Lemma keys_to_list {A} (m : trie A) : keys m = map fst (to_list m).
@@ -337,4 +340,329 @@ Proof.
   induction m as [|l IHl o r IHr _] using trie_ind; trivial.
   rewrite values_Node, to_list_Node, !map_app, !map_map, IHl, IHr.
   destruct o; repeat (f_equal; try (apply map_ext; now intros (?,?))).
+Qed.
+
+(** ** Membership in [to_list], [keys] and [values] *)
+
+Lemma In_to_list {A} (m : trie A) k v : In (k, v) (to_list m) <-> get k m = Some v.
+Proof.
+  revert k. induction m as [|l IHl o r IHr _] using trie_ind; intros k.
+  - split; [intros []|discriminate].
+  - rewrite to_list_Node, !in_app_iff, !in_map_iff, get_Node. split.
+    + intros [((k0,v0) & H & Hin)|[H|((k0,v0) & H & Hin)]]; simpl in H.
+      * injection H as <- <-. now apply IHl.
+      * destruct o; simpl in H; [destruct H as [[= <- <-]|[]]; reflexivity|destruct H].
+      * injection H as <- <-. now apply IHr.
+    + destruct k as [k|k|]; intros H.
+      * right; right. exists (k,v). split; [reflexivity|]. now apply IHr.
+      * left. exists (k,v). split; [reflexivity|]. now apply IHl.
+      * right; left. rewrite H. simpl. auto.
+Qed.
+
+Lemma In_keys {A} (m : trie A) k : In k (keys m) <-> get k m <> None.
+Proof.
+  rewrite keys_to_list, in_map_iff. split.
+  - intros ((k0,v) & <- & H). apply In_to_list in H. simpl. now rewrite H.
+  - intros H. destruct (get k m) as [v|] eqn:E; [|congruence].
+    exists (k,v). split; [reflexivity|]. now apply In_to_list.
+Qed.
+
+Lemma In_values {A} (m : trie A) v : In v (values m) <-> exists k, get k m = Some v.
+Proof.
+  rewrite values_to_list, in_map_iff. split.
+  - intros ((k,v0) & <- & H). exists k. now apply In_to_list.
+  - intros (k & H). exists (k,v). split; [reflexivity|]. now apply In_to_list.
+Qed.
+
+Local Lemma NoDup_app' {A} (l1 l2 : list A) :
+  NoDup l1 -> NoDup l2 -> (forall x, In x l1 -> In x l2 -> False) -> NoDup (l1 ++ l2).
+Proof.
+  induction 1 as [|x l1 Hx Hl1 IH]; simpl; intros Hl2 Hdisj; trivial.
+  constructor.
+  - rewrite in_app_iff. intros [H|H]; [exact (Hx H)|exact (Hdisj x (or_introl eq_refl) H)].
+  - apply IH; trivial. intros y Hy. apply Hdisj. now right.
+Qed.
+
+Local Lemma NoDup_map_inj {A B} (f : A -> B) l :
+  (forall x y, f x = f y -> x = y) -> NoDup l -> NoDup (map f l).
+Proof.
+  intros Hf. induction 1 as [|x l Hx Hl IH]; simpl; constructor; trivial.
+  rewrite in_map_iff. intros (y & Hy & Hin). apply Hf in Hy. subst. exact (Hx Hin).
+Qed.
+
+Lemma NoDup_keys {A} (m : trie A) : NoDup (keys m).
+Proof.
+  induction m as [|l IHl o r IHr _] using trie_ind; [constructor|].
+  rewrite keys_Node. apply NoDup_app'.
+  - apply NoDup_map_inj; [congruence|trivial].
+  - apply NoDup_app'.
+    + destruct o; repeat constructor. intros [].
+    + apply NoDup_map_inj; [congruence|trivial].
+    + intros x Hx Hy. destruct o; simpl in Hx; [destruct Hx as [<-|[]]|destruct Hx].
+      rewrite in_map_iff in Hy. destruct Hy as (k & [=] & _).
+  - intros x Hx Hy. rewrite in_map_iff in Hx. destruct Hx as (k & <- & _).
+    rewrite in_app_iff, in_map_iff in Hy.
+    destruct Hy as [Hy|(k' & [=] & _)].
+    destruct o; simpl in Hy; [destruct Hy as [[=]|[]]|destruct Hy].
+Qed.
+
+(** ** [to_list] is sorted, for any order of the bits with these properties
+    (for instance [PositiveOrderedTypeBits.bits_lt]). *)
+
+Section Sorted.
+Context {A : Type} (lt : positive -> positive -> Prop)
+        (lt_xO : forall i j, lt i j -> lt (xO i) (xO j))
+        (lt_xI : forall i j, lt i j -> lt (xI i) (xI j))
+        (lt_xO_xH : forall i, lt (xO i) xH)
+        (lt_xH_xI : forall j, lt xH (xI j))
+        (lt_xO_xI : forall i j, lt (xO i) (xI j)).
+Local Lemma Sorted_app (l1 l2 : list (positive * A)) :
+  Sorted (fun p q : positive * A => lt (fst p) (fst q)) l1 ->
+  Sorted (fun p q : positive * A => lt (fst p) (fst q)) l2 ->
+  (forall x y, In x l1 -> In y l2 -> lt (fst x) (fst y)) ->
+  Sorted (fun p q : positive * A => lt (fst p) (fst q)) (l1 ++ l2).
+Proof.
+  induction 1 as [|x l1 Hs IH Hinf]; simpl; intros Hs2 Hlt; trivial.
+  constructor; [apply IH; trivial; intros; apply Hlt; simpl; auto|].
+  destruct Hinf as [|y l1' H]; simpl.
+  - destruct l2; constructor. apply Hlt; simpl; auto.
+  - constructor; trivial.
+Qed.
+
+Local Lemma Sorted_fstmap f l :
+  (forall i j, lt i j -> lt (f i) (f j)) ->
+  Sorted (fun p q : positive * A => lt (fst p) (fst q)) l ->
+  Sorted (fun p q : positive * A => lt (fst p) (fst q)) (map (fstmap f) l).
+Proof.
+  intros Hf. induction 1 as [|(k,v) l Hs IH Hinf]; simpl; constructor; trivial.
+  destruct Hinf as [|(k',v') l' H]; simpl; constructor. simpl in *. now apply Hf.
+Qed.
+
+Lemma Sorted_to_list (m : trie A) :
+  Sorted (fun p q : positive * A => lt (fst p) (fst q)) (to_list m).
+Proof.
+  induction m as [|l IHl o r IHr _] using trie_ind; [constructor|].
+  rewrite to_list_Node.
+  apply Sorted_app; [apply Sorted_fstmap; trivial| apply Sorted_app |].
+  - destruct o; repeat constructor.
+  - apply Sorted_fstmap; trivial.
+  - intros (x,d) (y,d') Hx Hy.
+    destruct o; simpl in Hx; [destruct Hx as [[= <- <-]|[]]|destruct Hx].
+    rewrite in_map_iff in Hy. destruct Hy as ((k,v) & [= <- <-] & _).
+    simpl. apply lt_xH_xI.
+  - intros (x,d) (y,d') Hx Hy.
+    rewrite in_map_iff in Hx. destruct Hx as ((k,v) & [= <- <-] & _).
+    rewrite in_app_iff, in_map_iff in Hy.
+    destruct Hy as [Hy|((k',v') & [= <- <-] & _)];
+      [destruct o; simpl in Hy; [destruct Hy as [[= <- <-]|[]]|destruct Hy]|];
+      simpl; auto.
+Qed.
+End Sorted.
+
+(** * Operations that see the key of each binding *)
+
+(** [rev_append y x] reverses the positive [y] and concatenates it with [x].
+    The functions below carry the current path in the trie as an extra
+    argument, in reverse order; [rev i] is the key at path [i]. *)
+Fixpoint rev_append (y x : positive) : positive :=
+  match y with
+  | xH => x
+  | xI y => rev_append y (xI x)
+  | xO y => rev_append y (xO x)
+  end.
+Local Infix "@" := rev_append (at level 60).
+Definition rev x := x@xH.
+
+Lemma singleton_set {A} i (x : A) : Some (singleton i x) = set i x None.
+Proof. reflexivity. Qed.
+Lemma get_singleton_same {A} i (x : A) : get i (Some (singleton i x)) = Some x.
+Proof. rewrite singleton_set. apply get_set_same. Qed.
+Lemma get_singleton_diff {A} i j (x : A) : i <> j -> get i (Some (singleton j x)) = None.
+Proof. intros. rewrite singleton_set, get_set_diff; trivial. Qed.
+
+(** ** [mapi_filter]: [map_filter] with the key *)
+
+Section MapiFilter.
+Context {A B : Type} (f : positive -> A -> option B).
+
+Fixpoint xmapi_filter' (m : branch A) (i : positive) {struct m} : trie B :=
+  branch_map (fun l o r =>
+    Node (option_bind (fun l => xmapi_filter' l (xO i)) l)
+         (option_bind (f (rev i)) o)
+         (option_bind (fun r => xmapi_filter' r (xI i)) r)) m.
+
+Definition xmapi_filter (m : trie A) (i : positive) : trie B :=
+  match m with Some m => xmapi_filter' m i | None => None end.
+
+Definition mapi_filter (m : trie A) : trie B := xmapi_filter m xH.
+
+Lemma xmapi_filter_Node l o r i :
+  xmapi_filter (Node l o r) i =
+  Node (xmapi_filter l (xO i)) (option_bind (f (rev i)) o) (xmapi_filter r (xI i)).
+Proof. case l, o, r; reflexivity. Qed.
+
+Lemma get_xmapi_filter : forall k m i, get k (xmapi_filter m i) = option_bind (f (i@k)) (get k m).
+Proof.
+  induction k; intros; induction m using trie_ind;
+    rewrite ?xmapi_filter_Node, ?get_Node, ?IHk; simpl; auto.
+Qed.
+
+Lemma get_mapi_filter k m : get k (mapi_filter m) = option_bind (f k) (get k m).
+Proof. apply get_xmapi_filter. Qed.
+End MapiFilter.
+
+(** ** [mergei]: [combine] with the key *)
+
+Section Mergei.
+Context {A B C : Type} (f : positive -> option A -> option B -> option C).
+
+Local Definition mergei'_l i (m : branch A) : trie C :=
+  xmapi_filter (fun k a => f k (Some a) None) (Some m) i.
+Local Definition mergei'_r i (m : branch B) : trie C :=
+  xmapi_filter (fun k b => f k None (Some b)) (Some m) i.
+
+Let Fixpoint xmergei'' (m1 : branch A) (m2 : branch B) (i : positive) {struct m1} : trie C.
+Proof. (* 49 cases *)
+  case m1 as [ r1 | x1 | x1 r1 | l1 | l1 r1 | l1 x1 | l1 x1 r1 ];
+  case m2 as [ r2 | x2 | x2 r2 | l2 | l2 r2 | l2 x2 | l2 x2 r2 ]; (apply Node;
+   [ try (exact (xmergei'' l1 l2 (xO i)) || exact (mergei'_l (xO i) l1) || exact (mergei'_r (xO i) l2))
+   | apply (f (rev i)); [ try exact (Some x1) | try exact (Some x2) ]
+   | try (exact (xmergei'' r1 r2 (xI i)) || exact (mergei'_l (xI i) r1) || exact (mergei'_r (xI i) r2))
+   ]; exact None).
+Defined.
+Local Definition xmergei' := Eval cbv [xmergei'' mergei'_l mergei'_r Node xmapi_filter] in xmergei''.
+
+Definition xmergei (m1 : trie A) (m2 : trie B) (i : positive) : trie C :=
+  match m1, m2 with
+  | None, None => None
+  | None, Some m2 => mergei'_r i m2
+  | Some m1, None => mergei'_l i m1
+  | Some m1, Some m2 => xmergei' m1 m2 i
+  end.
+
+Definition mergei (m1 : trie A) (m2 : trie B) : trie C := xmergei m1 m2 xH.
+
+Context (f_None_None : forall k, f k None None = None).
+
+Lemma xmergei_Node_Node l1 o1 r1 l2 o2 r2 i :
+  xmergei (Node l1 o1 r1) (Node l2 o2 r2) i =
+  Node (xmergei l1 l2 (xO i)) (f (rev i) o1 o2) (xmergei r1 r2 (xI i)).
+Proof. case l1, o1, r1, l2, o2, r2; trivial; rewrite ?f_None_None; trivial. Qed.
+
+Lemma get_xmergei : forall k m1 m2 i,
+  get k (xmergei m1 m2 i) = f (i@k) (get k m1) (get k m2).
+Proof.
+  induction k; intros m1 m2 i;
+  induction m1 using trie_ind; induction m2 using trie_ind;
+  repeat (change (xmergei None) with (xmergei (Node None None None))
+       || change (xmergei ?x None) with (xmergei x (Node None None None)));
+  rewrite ?xmergei_Node_Node, ?get_Node, ?IHk; simpl; auto.
+Qed.
+
+Lemma get_mergei k m1 m2 : get k (mergei m1 m2) = f k (get k m1) (get k m2).
+Proof. apply get_xmergei. Qed.
+End Mergei.
+
+(** ** [fold] *)
+
+Section Fold.
+Context {A B : Type} (f : positive -> A -> B -> B).
+
+Fixpoint xfold' (m : branch A) (b : B) (i : positive) {struct m} : B :=
+  branch_map (fun l o r =>
+    let b := match l with Some l => xfold' l b (xO i) | None => b end in
+    let b := match o with Some x => f (rev i) x b | None => b end in
+    match r with Some r => xfold' r b (xI i) | None => b end) m.
+
+Definition xfold (m : trie A) (b : B) (i : positive) : B :=
+  match m with Some m => xfold' m b i | None => b end.
+
+(** [fold f m b] applies [f] to the bindings of [m] in the order of [to_list]. *)
+Definition fold (m : trie A) (b : B) : B := xfold m b xH.
+
+Lemma xfold_Node l o r b i :
+  xfold (Node l o r) b i =
+  match o with
+  | Some x => xfold r (f (rev i) x (xfold l b (xO i))) (xI i)
+  | None => xfold r (xfold l b (xO i)) (xI i)
+  end.
+Proof. case l, o, r; reflexivity. Qed.
+
+Lemma xfold_to_list : forall m b j,
+  xfold m b j = fold_left (fun a p => f (fst p) (snd p) a) (map (fstmap (rev_append j)) (to_list m)) b.
+Proof.
+  induction m as [|l IHl o r IHr _] using trie_ind; intros; trivial.
+  rewrite xfold_Node, to_list_Node, !map_app, !fold_left_app, !map_map.
+  destruct o; simpl; rewrite IHr, IHl;
+    repeat (f_equal; try (apply map_ext; now intros (?,?))).
+Qed.
+
+Lemma fold_to_list m b : fold m b = fold_left (fun a p => f (fst p) (snd p) a) (to_list m) b.
+Proof.
+  unfold fold. rewrite xfold_to_list.
+  erewrite map_ext with (g := fun p => p); [now rewrite map_id | now intros (k,v)].
+Qed.
+End Fold.
+
+Lemma fold_parametricity {A B C} (R : B -> C -> Prop)
+    (fb : positive -> A -> B -> B) (fc : positive -> A -> C -> C) :
+  (forall k v b c, R b c -> R (fb k v b) (fc k v c)) ->
+  forall b c, R b c -> forall m, R (fold fb m b) (fold fc m c).
+Proof.
+  intros H b c Hbc m. rewrite !fold_to_list. revert b c Hbc.
+  induction (to_list m) as [|(k,v) l IH]; simpl; auto.
+Qed.
+
+(** [of_list l] sets the bindings of [l] in order; [to_list] is its inverse. *)
+Definition of_list {A} (l : list (positive * A)) : trie A :=
+  fold_left (fun m p => set (fst p) (snd p) m) l None.
+
+Local Lemma get_fold_set_notin {A} (l : list (positive * A)) acc k :
+  ~ In k (map fst l) ->
+  get k (fold_left (fun m p => set (fst p) (snd p) m) l acc) = get k acc.
+Proof.
+  revert acc. induction l as [|(k',v) l IH]; simpl; intros acc Hk; trivial.
+  rewrite IH by tauto. apply get_set_diff. intros ->. apply Hk. now left.
+Qed.
+
+Local Lemma get_fold_set_in {A} (l : list (positive * A)) acc k v :
+  NoDup (map fst l) -> In (k, v) l ->
+  get k (fold_left (fun m p => set (fst p) (snd p) m) l acc) = Some v.
+Proof.
+  revert acc. induction l as [|(k',v') l IH]; simpl; intros acc Hnd Hin; [destruct Hin|].
+  inversion Hnd as [|? ? Hk' Hnd']; subst.
+  destruct Hin as [[= <- <-]|Hin].
+  - rewrite get_fold_set_notin by trivial. apply get_set_same.
+  - now apply IH.
+Qed.
+
+Lemma of_list_to_list {A} (m : trie A) : of_list (to_list m) = m.
+Proof.
+  apply extensionality. intros k. unfold of_list.
+  destruct (get k m) as [v|] eqn:E.
+  - apply get_fold_set_in; [rewrite <- keys_to_list; apply NoDup_keys|now apply In_to_list].
+  - rewrite get_fold_set_notin; trivial. rewrite <- keys_to_list, In_keys. tauto.
+Qed.
+
+(** The induction principle of [fold], in the form of coqutil's [map.fold_spec]:
+    the bindings are added one at a time, starting from the empty trie. *)
+Lemma fold_spec {A B} (P : trie A -> B -> Prop) (f : positive -> A -> B -> B) b :
+  P None b ->
+  (forall k v m r, get k m = None -> P m r -> P (set k v m) (f k v r)) ->
+  forall m, P m (fold f m b).
+Proof.
+  intros Hemp Hstep m. rewrite fold_to_list, <- (of_list_to_list m) at 1.
+  unfold of_list.
+  assert (Hnd : NoDup (map fst (to_list m))) by (rewrite <- keys_to_list; apply NoDup_keys).
+  revert Hnd. generalize (to_list m). intros l Hnd.
+  cut (forall r acc, NoDup (map fst l) -> (forall k, In k (map fst l) -> get k acc = None) ->
+    P acc r -> P (fold_left (fun m p => set (fst p) (snd p) m) l acc)
+                 (fold_left (fun a p => f (fst p) (snd p) a) l r)).
+  { intros H. apply H; trivial; intros k _; reflexivity. }
+  clear Hnd. induction l as [|(k,v) l IH]; simpl; intros r acc Hnd Hacc Hr; trivial.
+  inversion Hnd as [|? ? Hk Hnd']; subst.
+  apply IH; trivial.
+  - intros k' Hk'. rewrite get_set_diff; [now apply Hacc; right|].
+    intros ->. exact (Hk Hk').
+  - apply Hstep; trivial. now apply Hacc; left.
 Qed.
